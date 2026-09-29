@@ -88,6 +88,7 @@ function parseFit(buf){
 // ---------- Analyse ----------
 const hav=(a,b)=>{const R=6371000,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lon-a.lon)*r;
  const x=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x))};
+const ELE_STEP=1.0; // Höhenunterschiede unter diesem Wert (in m) zählen nicht
 function analyse(pts){
  let dist=0,mov=0,gain=0,loss=0,ref=pts.find(p=>p.ele!==undefined)?.ele,maxsp=0;
  pts.forEach((p,i)=>{
@@ -96,7 +97,7 @@ function analyse(pts){
    p.sp=p.sp??(dt>0?dd/dt:0);if(dt>0&&dt<=30&&p.sp>0.8)mov+=dt;}
   else p.sp=p.sp??0;
   p.dist=dist;
-  if(p.ele!==undefined&&ref!==undefined){const df=p.ele-ref;if(df>=3){gain+=df;ref=p.ele}else if(df<=-3){loss-=df;ref=p.ele}}
+  if(p.ele!==undefined&&ref!==undefined){const df=p.ele-ref;if(df>=ELE_STEP){gain+=df;ref=p.ele}else if(df<=-ELE_STEP){loss-=df;ref=p.ele}}
   if(p.sp>maxsp&&p.sp<30)maxsp=p.sp;
  });
  const avg=k=>{const a=pts.filter(p=>p[k]!==undefined);return a.length?a.reduce((s,p)=>s+p[k],0)/a.length:null};
@@ -129,7 +130,7 @@ async function importFiles(files){
    const all=await allRides(),t0=r.points[0].t||f.lastModified;
    if(all.some(x=>x.date==t0&&x.file==f.name)){alert(f.name+': bereits importiert');continue}
    const stats=analyse(r.points);
-   await putRide({name:r.name||'Ausfahrt '+new Date(t0).toLocaleDateString('de-DE'),date:t0,file:f.name,stats,points:r.points});
+   await putRide({name:r.name||'Ausfahrt '+new Date(t0).toLocaleDateString('de-DE'),date:t0,file:f.name,stats,sv:2,points:r.points});
   }catch(e){alert(f.name+': Import fehlgeschlagen ('+e.message+')')}
  }
  home();
@@ -308,7 +309,7 @@ async function dl(id){
  save(r.name+'.gpx',g,'application/gpx+xml');
 }
 async function exportAll(){save('ridelog-backup.json',JSON.stringify(await allRides()),'application/json')}
-home();
+(async()=>{for(const r of await allRides())if(r.sv!==2){r.stats=analyse(r.points);r.sv=2;await putRide(r)}home()})();
 </script>
 </body>
 </html>
