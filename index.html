@@ -154,7 +154,7 @@ async function home(){
  ${rides.length?`
  <div class="card"><h3>GESAMT</h3><div class="grid">${stat('Ausfahrten',rides.length)}${stat('Distanz',(tot.d/1000).toFixed(0)+' km')}${stat('Fahrzeit',dur(tot.t))}${stat('Höhenmeter',Math.round(tot.g)+' m')}${stat('Ø Tempo',tot.t?kmh(tot.d/tot.t):null)}</div></div>
  <div class="card"><h3>KILOMETER PRO WOCHE (LETZTE 12)</h3><canvas id="wk"></canvas></div>
- <div class="card"><h3>LEISTUNGSENTWICKLUNG · Ø TEMPO PRO MONAT</h3><canvas id="pf" style="height:180px"></canvas><p id="pd" style="margin:8px 0 0;font-weight:600"></p></div>
+ <div class="card"><h3>LEISTUNGSENTWICKLUNG</h3><div style="display:flex;gap:8px;margin-bottom:6px"><button id="pm0" onclick="pmode('real')">Ø Tempo</button><button id="pm1" class="sec" onclick="pmode('adj')">Höhenkorrigiert</button></div><p id="pn" style="margin:0 0 8px;color:var(--mu);font-size:12px"></p><canvas id="pf" style="height:180px"></canvas><p id="pd" style="margin:8px 0 0;font-weight:600"></p></div>
  <div class="card"><h3>REKORDE</h3>${pr('Längste Ausfahrt',longest,['dist',km])}${pr('Meiste Höhenmeter',climb,['gain',v=>Math.round(v)+' m'])}${pr('Höchster Schnitt',fast,['avgSpeed',kmh])}${topv&&topv.stats.maxSpeed?`<div class="ride" onclick="show(${topv.id})"><span>Höchstgeschwindigkeit<br><small>${esc(topv.name)}</small></span><span style="white-space:nowrap"><b>${kmh(topv.stats.maxSpeed)}</b> <button class="sec" id="hb" title="Verlauf anzeigen" onclick="event.stopPropagation();hist()">▾</button></span></div><div id="hist" hidden><canvas id="hc" style="height:180px"></canvas></div>`:''}</div>
  <div class="card"><h3>AKTIVITÄTEN</h3>${rides.map(r=>`<div class="ride" onclick="show(${r.id})"><span><b>${esc(r.name)}</b><br><small>${dt(r.date)}</small></span><span style="text-align:right">${km(r.stats.dist)}<br><small>${dur(r.stats.moving)} · ${Math.round(r.stats.gain)} m · ${kmh(r.stats.avgSpeed)}</small></span></div>`).join('')}</div>`
  :'<div class="card">Noch keine Ausfahrten. Importiere deine erste GPX- oder FIT-Datei.</div>'}`;
@@ -186,12 +186,18 @@ function hist(){
  R.forEach((r,i)=>{const rec=v[i]>m;m=Math.max(m,v[i]);x.globalAlpha=rec?1:.4;x.beginPath();x.arc(px(r),py(v[i]),rec?5:3,0,7);x.fill()});
  x.globalAlpha=1;
 }
+let perfMode='real';
+function pmode(m){perfMode=m;perf(ridesCache)}
 function perf(rides){
+ const B=perfMode=='adj';
+ $('pm0').className=B?'sec':'';$('pm1').className=B?'':'sec';
+ $('pn').textContent=B?'(Distanz + Höhenmeter / 100) ÷ Bewegungszeit – Höhenmeter zählen als zusätzliche flache Kilometer':'Distanz ÷ Bewegungszeit';
+ $('pd').style.fontWeight=600;
  const mo={};
  rides.forEach(r=>{
   if(!(r.stats.moving>0))return;
   const d=new Date(r.date),k=d.getFullYear()*12+d.getMonth(),m=(mo[k]=mo[k]||{d:0,t:0});
-  m.d+=r.stats.dist;m.t+=r.stats.moving; // Bewegungszeit
+  m.d+=r.stats.dist+(B?r.stats.gain*10:0);m.t+=r.stats.moving; // 100 hm = 1 km = 1000 m; Bewegungszeit
  });
  const ms=Object.keys(mo).map(Number).sort((a,b)=>a-b).map(k=>({k,v:mo[k].d/mo[k].t*3.6}));
  const e=$('pd');
