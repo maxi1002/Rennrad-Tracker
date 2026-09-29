@@ -191,7 +191,7 @@ function pmode(m){perfMode=m;perf(ridesCache)}
 function perf(rides){
  const B=perfMode=='adj';
  $('pm0').className=B?'sec':'';$('pm1').className=B?'':'sec';
- $('pn').textContent=B?';
+ 
  $('pd').style.fontWeight=600;
  const mo={};
  rides.forEach(r=>{
