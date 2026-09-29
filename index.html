@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rennrad Ausfahrten Tracker</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+    <!-- Header -->
+    <header class="bg-slate-800 border-b border-slate-700 py-4 px-6 shadow-md">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold tracking-tight text-cyan-400">🚴‍♂️ VeloTracker</h1>
+            <span class="text-xs bg-slate-700 text-slate-300 px-3 py-1 rounded-full">Lokal (Indexed/Local Storage)</span>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Linke Spalte: Upload & Ausfahrten-Liste -->
+        <div class="space-y-6">
+            <!-- Upload Box -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-750 shadow-lg">
+                <h2 class="text-lg font-semibold mb-3">Ausfahrt importieren</h2>
+                <input type="file" id="gpxInput" accept=".gpx" class="block w-full text-sm text-slate-400
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-lg file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-cyan-500 file:text-slate-950
+                    hover:file:bg-cyan-400 cursor-pointer mb-2"/>
+                <p class="text-xs text-slate-400">Unterstützt .gpx Dateien. Die Daten bleiben sicher in deinem Browser gespeichert.</p>
+            </div>
+
+            <!-- Liste der Ausfahrten -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-750 shadow-lg">
+                <h2 class="text-lg font-semibold mb-3">Deine Ausfahrten</h2>
+                <div id="ridesList" class="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+                    <!-- Wird dynamisch gefüllt -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Rechte Spalte: Detail-Ansicht (Karte & Diagramm) -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Statistik Boxen -->
+            <div class="grid grid-cols-3 gap-4">
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-750 text-center">
+                    <p class="text-xs text-slate-400">Distanz</p>
+                    <p id="statDist" class="text-2xl font-bold text-cyan-400">0.0 km</p>
+                </div>
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-750 text-center">
+                    <p class="text-xs text-slate-400">Höhenmeter</p>
+                    <p id="statElev" class="text-2xl font-bold text-cyan-400">0 m</p>
+                </div>
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-750 text-center">
+                    <p class="text-xs text-slate-400">Punkte</p>
+                    <p id="statPoints" class="text-2xl font-bold text-cyan-400">0</p>
+                </div>
+            </div>
+
+            <!-- Karte -->
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-750 shadow-lg">
+                <h3 class="text-sm font-semibold mb-2 text-slate-300">Streckenverlauf</h3>
+                <div id="map" class="w-full h-72 rounded-lg z-10"></div>
+            </div>
+
+            <!-- Höhenprofil Diagramm -->
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-750 shadow-lg">
+                <h3 class="text-sm font-semibold mb-2 text-slate-300">Höhenprofil</h3>
+                <div class="h-48">
+                    <canvas id="elevationChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let rides = JSON.parse(localStorage.getItem('velo_rides')) || [];
+        let map, polylineLayer, elevationChart;
+
+        // Init Map
+        function initMap() {
+            map = L.map('map').setView([51.1657, 10.4515], 6); // Deutschland-Zentrum als Default
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+        }
+
+        // Init Chart
+        function initChart() {
+            const ctx = document.getElementById('elevationChart').getContext('2d');
+            elevationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Höhe (m)',
+                        data: [],
+                        borderColor: '#22d3ee',
+                        backgroundColor: 'rgba(34, 211, 238, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        // GPX Datei einlesen
+        document.getElementById('gpxInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const text = event.target.result;
+                parseGPX(text, file.name);
+            };
+            reader.readAsText(file);
+        });
+
+        // Einfacher GPX Parser per DOM
+        function parseGPX(gpxText, fileName) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(gpxText, "text/xml");
+            const trkpts = xmlDoc.getElementsByTagName('trkpt');
+
+            if (trkpts.length === 0) {
+                alert("Keine GPS-Punkte in dieser Datei gefunden!");
+                return;
+            }
+
+            let points = [];
+            let elevations = [];
+            let totalDist = 0;
+            let totalElevGain = 0;
+
+            for (let i = 0; i < trkpts.length; i++) {
+                const lat = parseFloat(trkpts[i].getAttribute('lat'));
+                const lon = parseFloat(trkpts[i].getAttribute('lon'));
+                const eleEl = trkpts[i].getElementsByTagName('ele')[0];
+                const ele = eleEl ? parseFloat(eleEl.textContent) : 0;
+
+                points.push([lat, lon]);
+                elevations.push(ele);
+
+                if (i > 0) {
+                    const prev = points[i - 1];
+                    totalDist += getDistanceFromLatLonInKm(prev[0], prev[1], lat, lon);
+                    const diff = ele - elevations[i - 1];
+                    if (diff > 0) totalElevGain += diff;
+                }
+            }
+
+            const newRide = {
+                id: Date.now(),
+                name: fileName.replace('.gpx', ''),
+                date: new Date().toLocaleDateString(),
+                distance: totalDist.toFixed(2),
+                elevation: Math.round(totalElevGain),
+                points: points,
+                elevations: elevations
+            };
+
+            rides.push(newRide);
+            localStorage.setItem('velo_rides', JSON.stringify(rides));
+            renderRidesList();
+            loadRide(newRide.id);
+        }
+
+        // Distanz-Berechnung (Haversine Formel)
+        function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Radius der Erde in km
+            const dLat = deg2rad(lat2 - lat1);
+            const dLon = deg2rad(lon2 - lon1);
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        function deg2rad(deg) {
+            return deg * (Math.PI/180);
+        }
+
+        // Liste der Fahrten rendern
+        function renderRidesList() {
+            const listEl = document.getElementById('ridesList');
+            listEl.innerHTML = '';
+
+            if (rides.length === 0) {
+                listEl.innerHTML = '<p class="text-sm text-slate-500 italic">Noch keine Ausfahrten vorhanden.</p>';
+                return;
+            }
+
+            rides.forEach(ride => {
+                const div = document.createElement('div');
+                div.className = "bg-slate-750 p-3 rounded-lg border border-slate-700 flex justify-between items-center hover:border-cyan-500 cursor-pointer transition";
+                div.innerHTML = `
+                    <div>
+                        <p class="font-semibold text-sm">${ride.name}</p>
+                        <p class="text-xs text-slate-400">${ride.date} • ${ride.distance} km • ${ride.elevation} hm</p>
+                    </div>
+                    <button onclick="deleteRide(event, ${ride.id})" class="text-slate-500 hover:text-red-400 text-xs px-2 py-1">Löschen</button>
+                `;
+                div.onclick = () => loadRide(ride.id);
+                listEl.appendChild(div);
+            });
+        }
+
+        // Ausfahrt laden & anzeigen
+        function loadRide(id) {
+            const ride = rides.find(r => r.id === id);
+            if (!ride) return;
+
+            // Stats aktualisieren
+            document.getElementById('statDist').textContent = ride.distance + ' km';
+            document.getElementById('statElev').textContent = ride.elevation + ' m';
+            document.getElementById('statPoints').textContent = ride.points.length;
+
+            // Karte aktualisieren
+            if (polylineLayer) map.removeLayer(polylineLayer);
+            polylineLayer = L.polyline(ride.points, { color: '#22d3ee', weight: 4 }).addTo(map);
+            map.fitBounds(polylineLayer.getBounds(), { padding: [20, 20] });
+
+            // Chart aktualisieren
+            elevationChart.data.labels = ride.points.map((_, i) => i);
+            elevationChart.data.datasets[0].data = ride.elevations;
+            elevationChart.update();
+        }
+
+        // Ausfahrt löschen
+        function deleteRide(event, id) {
+            event.stopPropagation();
+            rides = rides.filter(r => r.id !== id);
+            localStorage.setItem('velo_rides', JSON.stringify(rides));
+            renderRidesList();
+            if (rides.length > 0) {
+                loadRide(rides[0].id);
+            } else {
+                document.getElementById('statDist').textContent = '0.0 km';
+                document.getElementById('statElev').textContent = '0 m';
+                document.getElementById('statPoints').textContent = '0';
+                if (polylineLayer) map.removeLayer(polylineLayer);
+            }
+        }
+
+        // Beim Start Initialisierung
+        window.onload = function() {
+            initMap();
+            initChart();
+            renderRidesList();
+            if (rides.length > 0) {
+                loadRide(rides[0].id);
+            }
+        };
+    </script>
+</body>
+</html>
