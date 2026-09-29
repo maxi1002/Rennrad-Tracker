@@ -117,7 +117,7 @@ const dt=t=>new Date(t).toLocaleString('de-DE',{weekday:'short',day:'2-digit',mo
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const stat=(l,v)=>v==null||v===''?'':`<div class="st"><b>${v}</b><span>${l}</span></div>`;
 const $=id=>document.getElementById(id);
-let map;
+let map,ridesCache=[];
 
 // ---------- Import ----------
 async function importFiles(files){
@@ -144,16 +144,16 @@ async function home(){
  stopWind();if(map){map.remove();map=null}
  const rides=(await allRides()).sort((a,b)=>b.date-a.date);
  const tot=rides.reduce((a,r)=>({d:a.d+r.stats.dist,t:a.t+r.stats.moving,g:a.g+r.stats.gain}),{d:0,t:0,g:0});
- const yr=new Date().getFullYear(),ry=rides.filter(r=>new Date(r.date).getFullYear()==yr);
+ ridesCache=rides;
  const rec=(k,f)=>rides.length?rides.reduce((b,r)=>r.stats[k]>b.stats[k]?r:b,rides[0]):null;
- const longest=rec('dist'),climb=rec('gain'),fast=rec('avgSpeed');
+ const longest=rec('dist'),climb=rec('gain'),fast=rec('avgSpeed'),topv=rec('maxSpeed');
  const pr=(l,r,f)=>r&&r.stats[f[0]]?`<div class="ride" onclick="show(${r.id})"><span>${l}<br><small>${esc(r.name)}</small></span><b>${f[1](r.stats[f[0]])}</b></div>`:'';
  $('app').innerHTML=`
  <div id="drop">GPX- oder FIT-Dateien hierher ziehen oder oben auf „Importieren“ klicken</div>
  ${rides.length?`
- <div class="card"><h3>GESAMT</h3><div class="grid">${stat('Ausfahrten',rides.length)}${stat('Distanz',(tot.d/1000).toFixed(0)+' km')}${stat('Fahrzeit',dur(tot.t))}${stat('Höhenmeter',Math.round(tot.g)+' m')}${stat(yr,(ry.reduce((s,r)=>s+r.stats.dist,0)/1000).toFixed(0)+' km')}</div></div>
+ <div class="card"><h3>GESAMT</h3><div class="grid">${stat('Ausfahrten',rides.length)}${stat('Distanz',(tot.d/1000).toFixed(0)+' km')}${stat('Fahrzeit',dur(tot.t))}${stat('Höhenmeter',Math.round(tot.g)+' m')}${stat('Ø Tempo',tot.t?kmh(tot.d/tot.t):null)}</div></div>
  <div class="card"><h3>KILOMETER PRO WOCHE (LETZTE 12)</h3><canvas id="wk"></canvas></div>
- <div class="card"><h3>REKORDE</h3>${pr('Längste Ausfahrt',longest,['dist',km])}${pr('Meiste Höhenmeter',climb,['gain',v=>Math.round(v)+' m'])}${pr('Höchster Schnitt',fast,['avgSpeed',kmh])}</div>
+ <div class="card"><h3>REKORDE</h3>${pr('Längste Ausfahrt',longest,['dist',km])}${pr('Meiste Höhenmeter',climb,['gain',v=>Math.round(v)+' m'])}${pr('Höchster Schnitt',fast,['avgSpeed',kmh])}${topv&&topv.stats.maxSpeed?`<div class="ride" onclick="show(${topv.id})"><span>Höchstgeschwindigkeit<br><small>${esc(topv.name)}</small></span><span style="white-space:nowrap"><b>${kmh(topv.stats.maxSpeed)}</b> <button class="sec" id="hb" title="Verlauf anzeigen" onclick="event.stopPropagation();hist()">▾</button></span></div><div id="hist" hidden><canvas id="hc" style="height:180px"></canvas></div>`:''}</div>
  <div class="card"><h3>AKTIVITÄTEN</h3>${rides.map(r=>`<div class="ride" onclick="show(${r.id})"><span><b>${esc(r.name)}</b><br><small>${dt(r.date)}</small></span><span style="text-align:right">${km(r.stats.dist)}<br><small>${dur(r.stats.moving)} · ${Math.round(r.stats.gain)} m · ${kmh(r.stats.avgSpeed)}</small></span></div>`).join('')}</div>`
  :'<div class="card">Noch keine Ausfahrten. Importiere deine erste GPX- oder FIT-Datei.</div>'}`;
  if(rides.length)weekly(rides);
@@ -162,6 +162,27 @@ function weekly(rides){
  const W=6048e5,now=Date.now(),mon=(()=>{const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-(d.getDay()+6)%7);return +d})();
  const b=Array(12).fill(0);rides.forEach(r=>{const i=11-Math.floor((mon-r.date+W-1)/W);if(r.date>=mon)b[11]+=r.stats.dist;else{const k=11-Math.ceil((mon-r.date)/W);if(k>=0)b[k]+=r.stats.dist}});
  bars($('wk'),b.map(x=>x/1000));
+}
+function hist(){
+ const h=$('hist'),open=h.hidden;h.hidden=!open;$('hb').textContent=open?'▴':'▾';$('hb').title=open?'Verlauf ausblenden':'Verlauf anzeigen';
+ if(!open)return;
+ const R=ridesCache.filter(r=>r.stats.maxSpeed>0).sort((a,b)=>a.date-b.date);
+ const[x,w,hh]=setup($('hc')),pad=34,v=R.map(r=>r.stats.maxSpeed*3.6);
+ let lo=Math.min(...v),hi=Math.max(...v);if(hi-lo<5){lo-=2.5;hi+=2.5}
+ const t0=R[0].date,t1=R.at(-1).date;
+ const px=r=>pad+(w-pad-8)*(t1>t0?(r.date-t0)/(t1-t0):.5),py=y=>hh-18-(hh-30)*(y-lo)/(hi-lo);
+ const ds=t=>new Date(t).toLocaleDateString('de-DE');
+ x.fillStyle=css('--mu');x.font='11px system-ui';
+ x.fillText(Math.round(hi)+' km/h',0,12);x.fillText(Math.round(lo),0,hh-18);x.fillText(ds(t0),pad,hh-2);
+ x.textAlign='right';x.fillText(ds(t1),w,hh-2);x.textAlign='left';
+ // Stufenlinie des jeweiligen Rekords
+ let m=0,prev=0;x.strokeStyle=css('--ac');x.lineWidth=2;x.beginPath();
+ R.forEach((r,i)=>{m=Math.max(m,v[i]);const X=px(r);i?(x.lineTo(X,py(prev)),x.lineTo(X,py(m))):x.moveTo(X,py(m));prev=m});
+ x.lineTo(w-8,py(m));x.stroke();
+ // Punkte: jede Ausfahrt, Rekordfahrten hervorgehoben
+ m=0;x.fillStyle=css('--ac');
+ R.forEach((r,i)=>{const rec=v[i]>m;m=Math.max(m,v[i]);x.globalAlpha=rec?1:.4;x.beginPath();x.arc(px(r),py(v[i]),rec?5:3,0,7);x.fill()});
+ x.globalAlpha=1;
 }
 function setup(c){const r=c.getBoundingClientRect(),k=devicePixelRatio||1;c.width=r.width*k;c.height=r.height*k;const x=c.getContext('2d');x.scale(k,k);return[x,r.width,r.height]}
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n);
