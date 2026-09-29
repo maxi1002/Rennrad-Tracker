@@ -4,10 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rennrad Ausfahrten Tracker</title>
+    
     <!-- Tailwind CSS -->
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- Leaflet CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { slate: { 750: '#2d3748' } } } }
+        }
+    </script>
+    
+    <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -19,7 +29,7 @@
             <h1 class="text-2xl font-bold tracking-tight text-cyan-400 cursor-pointer" onclick="showMainView()">🚴‍♂️ VeloTracker</h1>
             <div class="flex items-center gap-3">
                 <span id="viewTitle" class="text-sm font-medium text-slate-300 hidden md:inline">Übersicht & Statistik</span>
-                <span class="text-xs bg-slate-700 text-slate-300 px-3 py-1 rounded-full">Lokal (LocalStorage)</span>
+                <span class="text-xs bg-slate-700 text-slate-300 px-3 py-1 rounded-full">Lokal (Ohne externe API)</span>
             </div>
         </div>
     </header>
@@ -70,7 +80,7 @@
                         file:text-sm file:font-semibold
                         file:bg-cyan-500 file:text-slate-950
                         hover:file:bg-cyan-400 cursor-pointer mb-2"/>
-                    <p class="text-xs text-slate-400" id="uploadStatus">Unterstützt .gpx und .fit Dateien.</p>
+                    <p class="text-xs text-slate-400" id="uploadStatus">Eigener lokaler Parser: Unterstützt .gpx und .fit</p>
                 </div>
 
                 <!-- Liste der Ausfahrten -->
@@ -148,32 +158,42 @@
             </div>
         </div>
     </div>
-
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
-    <!-- Hauptskript (Standard JS, KEIN Module, um Klick-Events und Ladevorgang zu sichern) -->
     <script>
+        // --- 1. HILFSFUNKTIONEN FÜR ZEITEN ---
+        function formatDuration(totalSeconds) {
+            if (!totalSeconds || isNaN(totalSeconds) || totalSeconds <= 0) return "0 min";
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            
+            if (hours > 0) {
+                return `${hours}h ${minutes}m ${seconds}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${seconds}s`;
+            } else {
+                return `${seconds}s`;
+            }
+        }
+
+        // --- 2. GLOBALE VARIABLEN & INIT ---
         let rides = [];
         try {
             rides = JSON.parse(localStorage.getItem('velo_rides')) || [];
-        } catch (e) {
-            rides = [];
-        }
+        } catch (e) { rides = []; }
         
         let map, polylineLayer, elevationChart;
         let currentActiveRideId = null;
 
-        // Init Map (ohne API Key)
         function initMap() {
             if (map) return;
             map = L.map('map').setView([51.1657, 10.4515], 6);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap contributors'
+                attribution: '&copy; OpenStreetMap contributors',
+                maxZoom: 19
             }).addTo(map);
         }
 
-        // Init Chart
         function initChart() {
             const ctx = document.getElementById('elevationChart').getContext('2d');
             if (elevationChart) elevationChart.destroy();
@@ -182,35 +202,21 @@
                 data: {
                     labels: [],
                     datasets: [{
-                        label: 'Höhe (m)',
-                        data: [],
-                        borderColor: '#22d3ee',
-                        backgroundColor: 'rgba(34, 211, 238, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        pointRadius: 0
+                        label: 'Höhe (m)', data: [], borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.1)',
+                        borderWidth: 2, fill: true, pointRadius: 0
                     }]
                 },
                 options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
                     scales: {
-                        x: { 
-                            title: { display: true, text: 'Distanz (km)', color: '#94a3b8' },
-                            grid: { color: 'rgba(255,255,255,0.05)' }, 
-                            ticks: { color: '#94a3b8', font: { size: 10 } } 
-                        },
-                        y: { 
-                            title: { display: true, text: 'Höhe (m)', color: '#94a3b8' },
-                            grid: { color: 'rgba(255,255,255,0.05)' }, 
-                            ticks: { color: '#94a3b8', font: { size: 10 } } 
-                        }
+                        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
                     }
                 }
             });
         }
 
+        // --- 3. UI NAVIGATION & RENDER ---
         function showMainView() {
             document.getElementById('mainView').classList.remove('hidden');
             document.getElementById('detailView').classList.add('hidden');
@@ -223,90 +229,75 @@
             document.getElementById('mainView').classList.add('hidden');
             document.getElementById('detailView').classList.remove('hidden');
             currentActiveRideId = id;
-            
             setTimeout(() => {
-                initMap();
-                initChart();
-                loadRideDetails(id);
-                map.invalidateSize();
+                initMap(); initChart(); loadRideDetails(id); map.invalidateSize();
             }, 100);
         }
 
         function updateGlobalStats() {
-            const totalRides = rides.length;
-            let totalDist = 0;
-            let totalElev = 0;
-            let maxSpeed = 0;
-            let longestRide = 0;
-            let speeds = [];
-
+            let totalDist = 0, totalElev = 0, maxSpeed = 0, longestRide = 0, speeds = [];
             rides.forEach(r => {
-                const dist = parseFloat(r.distance);
-                const elev = parseFloat(r.elevation);
-                const speed = parseFloat(r.avgSpeed || 0);
-                const maxS = parseFloat(r.maxSpeed || 0);
-
-                totalDist += dist;
-                totalElev += elev;
-                if (maxS > maxSpeed) maxSpeed = maxS;
-                if (speed > 0) speeds.push(speed);
-                if (dist > longestRide) longestRide = dist;
+                totalDist += parseFloat(r.distance);
+                totalElev += parseFloat(r.elevation);
+                if (parseFloat(r.maxSpeed || 0) > maxSpeed) maxSpeed = parseFloat(r.maxSpeed);
+                if (parseFloat(r.avgSpeed || 0) > 0) speeds.push(parseFloat(r.avgSpeed));
+                if (parseFloat(r.distance) > longestRide) longestRide = parseFloat(r.distance);
             });
-
             const avgSpeedOverall = speeds.length > 0 ? (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1) : '0.0';
-
             document.getElementById('statTotalDist').textContent = totalDist.toFixed(1) + ' km';
             document.getElementById('statTotalElev').textContent = Math.round(totalElev) + ' m';
-            document.getElementById('statTotalRides').textContent = totalRides;
+            document.getElementById('statTotalRides').textContent = rides.length;
             document.getElementById('statMaxSpeed').textContent = maxSpeed.toFixed(1) + ' km/h';
             document.getElementById('statAvgSpeed').textContent = avgSpeedOverall + ' km/h';
             document.getElementById('statLongestRide').textContent = longestRide.toFixed(1) + ' km';
         }
 
-        // DATEI UPLOAD LOGIK
+        function saveAndOpenRide(newRide) {
+            rides.push(newRide);
+            localStorage.setItem('velo_rides', JSON.stringify(rides));
+            resetUploadStatus();
+            updateGlobalStats();
+            renderRidesList();
+            showDetailView(newRide.id);
+        }
+
+        function resetUploadStatus() {
+            document.getElementById('fileInput').value = ''; 
+            const status = document.getElementById('uploadStatus');
+            status.textContent = "Eigener lokaler Parser: Unterstützt .gpx und .fit";
+            status.classList.remove("text-cyan-400");
+            status.classList.remove("text-red-400");
+        }
+
+        // --- 4. DATEI UPLOAD LISTENER ---
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
 
-            const fileName = file.name.toLowerCase();
-            const statusText = document.getElementById('uploadStatus');
-            statusText.textContent = "Verarbeite Datei... Bitte warten.";
-            statusText.classList.add("text-cyan-400");
+            document.getElementById('uploadStatus').textContent = "Verarbeite Datei lokal... Bitte warten.";
+            document.getElementById('uploadStatus'].classList.add("text-cyan-400");
             
-            if (fileName.endsWith('.gpx')) {
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    parseGPX(event.target.result, file.name);
-                    resetUploadStatus();
-                };
+            const reader = new FileReader();
+            if (file.name.toLowerCase().endsWith('.gpx')) {
+                reader.onload = (event) => parseGPX(event.target.result, file.name);
                 reader.readAsText(file);
-            } else if (fileName.endsWith('.fit')) {
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    parseFIT(event.target.result, file.name);
-                };
+            } else if (file.name.toLowerCase().endsWith('.fit')) {
+                reader.onload = (event) => parseCustomFIT(event.target.result, file.name);
                 reader.readAsArrayBuffer(file);
             } else {
-                alert("Bitte wählen Sie eine gültige .gpx oder .fit Datei aus.");
+                alert("Bitte eine .gpx oder .fit Datei wählen.");
                 resetUploadStatus();
             }
         });
 
-        function resetUploadStatus() {
-            document.getElementById('fileInput').value = ''; 
-            const statusText = document.getElementById('uploadStatus');
-            statusText.textContent = "Unterstützt .gpx und .fit Dateien.";
-            statusText.classList.remove("text-cyan-400");
-        }
-
+        // --- 5. GPX PARSER ---
         function parseGPX(gpxText, fileName) {
             try {
-                const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(gpxText, "text/xml");
+                const xmlDoc = new DOMParser().parseFromString(gpxText, "text/xml");
                 const trkpts = xmlDoc.getElementsByTagName('trkpt');
-
                 if (trkpts.length === 0) {
-                    alert("Keine GPS-Punkte in dieser GPX-Datei gefunden!");
+                    alert("Keine GPS-Punkte gefunden.");
+                    resetUploadStatus();
                     return;
                 }
 
@@ -331,11 +322,8 @@
                     elevations.push(ele);
 
                     if (i > 0) {
-                        const prev = points[i - 1];
-                        const distStep = getDistanceFromLatLonInKm(prev[0], prev[1], lat, lon);
-                        totalDist += distStep;
+                        totalDist += getDistanceFromLatLonInKm(points[i-1][0], points[i-1][1], lat, lon);
                         distances.push(parseFloat(totalDist.toFixed(2)));
-
                         const diff = ele - elevations[i - 1];
                         if (diff > 0) totalElevGain += diff;
                     } else {
@@ -343,213 +331,198 @@
                     }
                 }
 
-                let durationMinutes = 0, avgSpeed = 0;
-                if (startTime && endTime && endTime > startTime) {
-                    durationMinutes = Math.round((endTime - startTime) / 60000);
-                    if (durationMinutes > 0 && totalDist > 0) {
-                        avgSpeed = (totalDist / (durationMinutes / 60)).toFixed(1);
-                    }
-                } else {
-                    durationMinutes = Math.round(totalDist * 3.5);
-                    avgSpeed = durationMinutes > 0 ? (totalDist / (durationMinutes / 60)).toFixed(1) : 0;
-                }
+                let durationSeconds = (startTime && endTime && endTime > startTime) ? Math.round((endTime - startTime) / 1000) : Math.round(totalDist * 130);
+                let avgSpeed = durationSeconds > 0 ? (totalDist / (durationSeconds / 3600)).toFixed(1) : 0;
+                let maxSpeed = (avgSpeed * 1.3).toFixed(1);
 
-                const maxSpeed = (avgSpeed * 1.3).toFixed(1);
-
-                const newRide = {
-                    id: Date.now(),
-                    name: fileName.replace(/\.[^/.]+$/, ""),
-                    date: new Date().toLocaleDateString(),
-                    distance: totalDist.toFixed(2),
-                    elevation: Math.round(totalElevGain),
-                    duration: durationMinutes,
-                    avgSpeed: avgSpeed,
-                    maxSpeed: maxSpeed,
-                    points: points,
-                    elevations: elevations,
-                    distances: distances
-                };
-
-                saveAndOpenRide(newRide);
-            } catch (err) {
-                alert("Fehler beim Auslesen der GPX-Datei.");
-                console.error(err);
-            }
+                saveAndOpenRide({
+                    id: Date.now(), name: fileName.replace(/\.[^/.]+$/, ""), date: new Date().toLocaleDateString(),
+                    distance: totalDist.toFixed(2), elevation: Math.round(totalElevGain), durationSeconds: durationSeconds,
+                    avgSpeed: avgSpeed, maxSpeed: maxSpeed, points: points, elevations: elevations, distances: distances
+                });
+            } catch (err) { alert("Fehler beim Lesen der GPX."); resetUploadStatus(); }
         }
 
-        // Dynamischer, asynchroner FIT-Parser (Lädt Library nur wenn nötig)
-        async function parseFIT(buffer, fileName) {
+        // --- 6. KORRIGIERTER BINÄR-FIT-PARSER ---
+        function parseCustomFIT(arrayBuffer, fileName) {
             try {
-                // Modul dynamisch über jsdelivr laden (unterstützt Browser-Polyfills)
-                const { default: FitParser } = await import('https://cdn.jsdelivr.net/npm/fit-parser@1.9.0/+esm');
+                const view = new DataView(arrayBuffer);
+                let offset = 0;
                 
-                const fitParser = new FitParser({
-                    force: true,
-                    speedUnit: 'km/h',
-                    distanceUnit: 'km',
-                    temperatureUnit: 'celsius'
-                });
+                const headerSize = view.getUint8(0);
+                if (headerSize !== 12 && headerSize !== 14) {
+                    throw new Error("Ungültige FIT Datei (Falscher Header).");
+                }
+                
+                const dataSize = view.getUint32(4, true); 
+                const endOffset = headerSize + dataSize;
+                
+                offset = headerSize;
+                let definitions = {};
+                let points = [], elevations = [], distances = [], speeds = [];
+                let totalDist = 0, totalElevGain = 0;
+                let firstTimestamp = null, lastTimestamp = null;
 
-                const uint8Array = new Uint8Array(buffer);
+                while (offset < endOffset && offset < view.byteLength) {
+                    const recordHeader = view.getUint8(offset);
+                    offset += 1;
 
-                fitParser.parse(uint8Array, function (error, data) {
-                    resetUploadStatus();
-                    
-                    if (error) {
-                        alert("Fehler beim Verarbeiten der FIT-Datei: " + error);
-                        console.error(error);
-                        return;
-                    }
+                    if ((recordHeader & 0x80) === 0) {
+                        const localMsgType = recordHeader & 0x0F;
+                        const isDefinition = (recordHeader & 0x40) !== 0;
+                        const hasDevData = (recordHeader & 0x20) !== 0;
 
-                    const records = data.records || [];
-                    if (records.length === 0) {
-                        alert("Die Datei enthält keine GPS-Records.");
-                        return;
-                    }
+                        if (isDefinition) {
+                            if (offset + 5 > view.byteLength) break;
+                            offset += 1; // Reserved
+                            const littleEndian = view.getUint8(offset) === 0;
+                            offset += 1;
+                            const globalMsgNum = view.getUint16(offset, littleEndian);
+                            offset += 2;
+                            const numFields = view.getUint8(offset);
+                            offset += 1;
 
-                    let points = [], elevations = [], distances = [], speeds = [];
-                    let totalDist = 0, totalElevGain = 0;
+                            let fields = [];
+                            if (offset + (numFields * 3) > view.byteLength) break;
 
-                    records.forEach((rec, i) => {
-                        if (rec.position_lat !== undefined && rec.position_long !== undefined) {
-                            let lat = rec.position_lat;
-                            let lon = rec.position_long;
+                            for (let i = 0; i < numFields; i++) {
+                                fields.push({ num: view.getUint8(offset), size: view.getUint8(offset + 1) });
+                                offset += 3;
+                            }
+
+                            if (hasDevData) {
+                                if (offset + 1 > view.byteLength) break;
+                                const numDevFields = view.getUint8(offset);
+                                offset += 1;
+                                if (offset + (numDevFields * 3) > view.byteLength) break;
+                                for (let i = 0; i < numDevFields; i++) {
+                                    fields.push({ size: view.getUint8(offset + 1) }); 
+                                    offset += 3;
+                                }
+                            }
+                            definitions[localMsgType] = { globalMsgNum, littleEndian, fields };
                             
-                            // Garmin Semicircle Umrechnung
-                            if (Math.abs(lat) > 180) lat = lat * (180 / Math.pow(2, 31));
-                            if (Math.abs(lon) > 180) lon = lon * (180 / Math.pow(2, 31));
+                        } else {
+                            const def = definitions[localMsgType];
+                            if (!def) break;
 
-                            const ele = rec.altitude || 0;
-                            const dist = rec.distance || (i * 0.05); 
-                            const speed = rec.speed || 25; 
+                            let lat, lon, ele, dist, speed, timestamp;
 
-                            points.push([lat, lon]);
-                            elevations.push(ele);
-                            distances.push(parseFloat(dist.toFixed(2)));
-                            speeds.push(speed);
+                            for (let field of def.fields) {
+                                if (offset + field.size > view.byteLength) break;
 
-                            if (dist > totalDist) totalDist = dist;
+                                if (def.globalMsgNum === 20) { // Record Message
+                                    if (field.num === 253 && field.size === 4) { // Timestamp (Garmin Epoch seconds since 1989)
+                                        timestamp = view.getUint32(offset, def.littleEndian);
+                                    } else if (field.num === 0 && field.size === 4) {
+                                        const val = view.getInt32(offset, def.littleEndian);
+                                        if (val !== 0x7FFFFFFF) lat = val * (180 / 2147483648);
+                                    } else if (field.num === 1 && field.size === 4) {
+                                        const val = view.getInt32(offset, def.littleEndian);
+                                        if (val !== 0x7FFFFFFF) lon = val * (180 / 2147483648);
+                                    } else if (field.num === 2 && field.size === 2) {
+                                        const val = view.getUint16(offset, def.littleEndian);
+                                        if (val !== 0xFFFF) ele = (val / 5) - 500;
+                                    } else if (field.num === 5 && field.size === 4) {
+                                        // WICHTIG: Distanz im FIT-Format liegt in cm vor (oder als Skalierung). Teilen durch 100000 gibt Meter, /1000 gibt Kilometer. 
+                                        // Normalerweise: 100 = cm -> / 100000 = km. Oder wenn Feld in Millimetern: / 1000000. Hier prüfen wir gängige Skalierung (Standard FIT Distanz ist 100 = 1m -> getrimmt durch 100000).
+                                        const val = view.getUint32(offset, def.littleEndian);
+                                        if (val !== 0xFFFFFFFF) dist = val / 100000; 
+                                    } else if (field.num === 6 && field.size === 2) {
+                                        const val = view.getUint16(offset, def.littleEndian);
+                                        if (val !== 0xFFFF) speed = (val / 1000) * 3.6;
+                                    }
+                                }
+                                offset += field.size;
+                            }
 
-                            if (i > 0) {
-                                const diff = ele - elevations[i - 1];
-                                if (diff > 0) totalElevGain += diff;
+                            if (def.globalMsgNum === 20 && lat !== undefined && lon !== undefined && Math.abs(lat) <= 90) {
+                                points.push([lat, lon]);
+                                
+                                if (timestamp) {
+                                    if (!firstTimestamp) firstTimestamp = timestamp;
+                                    lastTimestamp = timestamp;
+                                }
+
+                                const currentEle = ele !== undefined ? ele : (elevations.length > 0 ? elevations[elevations.length - 1] : 0);
+                                elevations.push(currentEle);
+                                
+                                let currentDist = dist !== undefined ? dist : (totalDist + 0.01);
+                                distances.push(parseFloat(currentDist.toFixed(2)));
+                                if (currentDist > totalDist) totalDist = currentDist;
+                                
+                                if (speed > 0) speeds.push(speed);
+
+                                if (elevations.length > 1) {
+                                    const diff = currentEle - elevations[elevations.length - 2];
+                                    if (diff > 0) totalElevGain += diff;
+                                }
                             }
                         }
-                    });
-
-                    if (points.length === 0) {
-                        alert("Die FIT-Datei enthält keine verarbeitbaren GPS-Koordinaten.");
-                        return;
+                    } else {
+                        const localMsgType = (recordHeader & 0x60) >> 5;
+                        const def = definitions[localMsgType];
+                        if (def) {
+                            for (let field of def.fields) offset += field.size;
+                        } else {
+                            break; 
+                        }
                     }
+                }
 
-                    let durationMinutes = 60;
-                    if (data.sessions && data.sessions.length > 0 && data.sessions[0].total_timer_time) {
-                        durationMinutes = Math.round(data.sessions[0].total_timer_time / 60);
-                    } else if (records.length > 0 && records[0].timestamp && records[records.length-1].timestamp) {
-                        const first = new Date(records[0].timestamp);
-                        const last = new Date(records[records.length-1].timestamp);
-                        durationMinutes = Math.round((last - first) / 60000);
-                    }
+                if (points.length === 0) {
+                    alert("FIT-Datei erfolgreich gelesen, aber enthält keine GPS-Punkte.");
+                    resetUploadStatus();
+                    return;
+                }
 
-                    const avgSpeed = durationMinutes > 0 ? (totalDist / (durationMinutes / 60)).toFixed(1) : 25.0;
-                    const maxSpeed = speeds.length > 0 ? Math.max(...speeds).toFixed(1) : (avgSpeed * 1.4).toFixed(1);
+                let durationSeconds = (firstTimestamp && lastTimestamp && lastTimestamp > firstTimestamp) ? (lastTimestamp - firstTimestamp) : Math.round((totalDist / 25) * 3600);
+                if (durationSeconds < 0) durationSeconds = 0;
 
-                    const newRide = {
-                        id: Date.now(),
-                        name: fileName.replace(/\.[^/.]+$/, ""),
-                        date: new Date().toLocaleDateString(),
-                        distance: totalDist.toFixed(2),
-                        elevation: Math.round(totalElevGain),
-                        duration: durationMinutes,
-                        avgSpeed: avgSpeed,
-                        maxSpeed: maxSpeed,
-                        points: points,
-                        elevations: elevations,
-                        distances: distances
-                    };
+                const avgSpeed = speeds.length > 0 ? (speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(1) : (durationSeconds > 0 ? (totalDist / (durationSeconds / 3600)).toFixed(1) : 25.0);
+                const maxSpeed = speeds.length > 0 ? Math.max(...speeds).toFixed(1) : (avgSpeed * 1.3).toFixed(1);
 
-                    saveAndOpenRide(newRide);
+                saveAndOpenRide({
+                    id: Date.now(), name: fileName.replace(/\.[^/.]+$/, ""), date: new Date().toLocaleDateString(),
+                    distance: totalDist.toFixed(2), elevation: Math.round(totalElevGain), durationSeconds: durationSeconds,
+                    avgSpeed: avgSpeed, maxSpeed: maxSpeed, points: points, elevations: elevations, distances: distances
                 });
+
             } catch (err) {
+                console.error("FIT Parse Error:", err);
+                alert("Fehler beim Parsen der Binärdaten der FIT-Datei.");
                 resetUploadStatus();
-                alert("Ladefehler: Die FIT-Bibliothek konnte nicht aus dem Internet geladen werden. Bitte prüfe deine Verbindung.");
-                console.error(err);
             }
         }
 
-        function saveAndOpenRide(newRide) {
-            rides.push(newRide);
-            localStorage.setItem('velo_rides', JSON.stringify(rides));
-            updateGlobalStats();
-            renderRidesList();
-            showDetailView(newRide.id);
-        }
-
-        // Haversine Distanzformel für GPX
+        // --- HILFSFUNKTIONEN ---
         function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
-            const R = 6371;
-            const dLat = (lat2 - lat1) * (Math.PI / 180);
-            const dLon = (lon2 - lon1) * (Math.PI / 180);
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-                      Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
-        }
-
-        function loadSampleData() {
-            const sample = {
-                id: Date.now(),
-                name: "Feierabend-Runde Harz",
-                date: "12.06.2026",
-                distance: "48.5",
-                elevation: "620",
-                duration: 105,
-                avgSpeed: "27.7",
-                maxSpeed: "52.4",
-                points: [
-                    [51.9, 10.3], [51.92, 10.32], [51.95, 10.35], [51.98, 10.38], [52.0, 10.4]
-                ],
-                elevations: [150, 180, 320, 290, 150],
-                distances: [0, 12.1, 24.3, 36.5, 48.5]
-            };
-            saveAndOpenRide(sample);
+            const R = 6371, p = Math.PI/180;
+            const a = 0.5 - Math.cos((lat2 - lat1) * p)/2 + Math.cos(lat1 * p) * Math.cos(lat2 * p) * (1 - Math.cos((lon2 - lon1) * p))/2;
+            return R * 2 * Math.asin(Math.sqrt(a));
         }
 
         function renderRidesList() {
-            const listEl = document.getElementById('ridesList');
-            listEl.innerHTML = '';
-
-            if (rides.length === 0) {
-                listEl.innerHTML = '<p class="text-sm text-slate-500 italic p-2">Noch keine Ausfahrten vorhanden. Lade eine GPX- oder FIT-Datei hoch oder klicke auf "Beispiel laden".</p>';
-                return;
-            }
-
-            rides.forEach(ride => {
+            const list = document.getElementById('ridesList');
+            list.innerHTML = rides.length === 0 ? '<p class="text-sm text-slate-500 p-2">Keine Ausfahrten.</p>' : '';
+            [...rides].reverse().forEach(ride => {
                 const div = document.createElement('div');
-                div.className = "bg-slate-750 p-3.5 rounded-lg border border-slate-700 flex justify-between items-center hover:border-cyan-500 cursor-pointer transition";
-                div.innerHTML = `
-                    <div>
-                        <p class="font-semibold text-sm text-slate-200">${ride.name}</p>
-                        <p class="text-xs text-slate-400">${ride.date} • ${ride.distance} km • ${ride.elevation} hm</p>
-                    </div>
-                    <div class="text-cyan-400 text-sm font-medium">Ansehen →</div>
-                `;
+                div.className = "bg-slate-750 p-3.5 rounded-lg border border-slate-700 flex justify-between items-center hover:border-cyan-500 cursor-pointer transition mb-2";
+                div.innerHTML = `<div><p class="font-semibold text-sm text-slate-200">${ride.name}</p><p class="text-xs text-slate-400">${ride.date} • ${ride.distance} km • ${ride.elevation} hm</p></div><div class="text-cyan-400 text-sm">→</div>`;
                 div.onclick = () => showDetailView(ride.id);
-                listEl.appendChild(div);
+                list.appendChild(div);
             });
         }
 
         function loadRideDetails(id) {
             const ride = rides.find(r => r.id === id);
             if (!ride) return;
-
             document.getElementById('detailTitle').textContent = ride.name;
             document.getElementById('detailSubtitle').textContent = `Aufgezeichnet am ${ride.date}`;
             document.getElementById('detDist').textContent = ride.distance + ' km';
             document.getElementById('detElev').textContent = ride.elevation + ' m';
             document.getElementById('detSpeed').textContent = ride.avgSpeed + ' km/h';
-            document.getElementById('detTime').textContent = ride.duration + ' Min';
+            document.getElementById('detTime').textContent = formatDuration(ride.durationSeconds);
 
             if (polylineLayer) map.removeLayer(polylineLayer);
             polylineLayer = L.polyline(ride.points, { color: '#22d3ee', weight: 4 }).addTo(map);
@@ -561,18 +534,22 @@
         }
 
         function deleteCurrentRide() {
-            if (!currentActiveRideId) return;
-            if (!confirm("Möchtest du diese Ausfahrt wirklich löschen?")) return;
-
-            rides = rides.filter(r => r.id !== currentActiveRideId);
-            localStorage.setItem('velo_rides', JSON.stringify(rides));
-            showMainView();
+            if (confirm("Wirklich löschen?")) {
+                rides = rides.filter(r => r.id !== currentActiveRideId);
+                localStorage.setItem('velo_rides', JSON.stringify(rides));
+                showMainView();
+            }
         }
 
-        window.onload = function() {
-            updateGlobalStats();
-            renderRidesList();
-        };
+        function loadSampleData() {
+            saveAndOpenRide({
+                id: Date.now(), name: "Feierabend-Runde Harz", date: "12.06.2026", distance: "48.5", elevation: "620", durationSeconds: 6305, avgSpeed: "27.7", maxSpeed: "52.4",
+                points: [[51.9, 10.3], [51.92, 10.32], [51.95, 10.35], [51.98, 10.38], [52.0, 10.4]],
+                elevations: [150, 180, 320, 290, 150], distances: [0, 12.1, 24.3, 36.5, 48.5]
+            });
+        }
+
+        window.onload = () => { updateGlobalStats(); renderRidesList(); };
     </script>
 </body>
 </html>
