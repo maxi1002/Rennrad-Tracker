@@ -154,10 +154,11 @@ async function home(){
  ${rides.length?`
  <div class="card"><h3>GESAMT</h3><div class="grid">${stat('Ausfahrten',rides.length)}${stat('Distanz',(tot.d/1000).toFixed(0)+' km')}${stat('Fahrzeit',dur(tot.t))}${stat('Höhenmeter',Math.round(tot.g)+' m')}${stat('Ø Tempo',tot.t?kmh(tot.d/tot.t):null)}</div></div>
  <div class="card"><h3>KILOMETER PRO WOCHE (LETZTE 12)</h3><canvas id="wk"></canvas></div>
+ <div class="card"><h3>LEISTUNGSENTWICKLUNG · Ø TEMPO PRO MONAT</h3><canvas id="pf" style="height:180px"></canvas><p id="pd" style="margin:8px 0 0;font-weight:600"></p></div>
  <div class="card"><h3>REKORDE</h3>${pr('Längste Ausfahrt',longest,['dist',km])}${pr('Meiste Höhenmeter',climb,['gain',v=>Math.round(v)+' m'])}${pr('Höchster Schnitt',fast,['avgSpeed',kmh])}${topv&&topv.stats.maxSpeed?`<div class="ride" onclick="show(${topv.id})"><span>Höchstgeschwindigkeit<br><small>${esc(topv.name)}</small></span><span style="white-space:nowrap"><b>${kmh(topv.stats.maxSpeed)}</b> <button class="sec" id="hb" title="Verlauf anzeigen" onclick="event.stopPropagation();hist()">▾</button></span></div><div id="hist" hidden><canvas id="hc" style="height:180px"></canvas></div>`:''}</div>
  <div class="card"><h3>AKTIVITÄTEN</h3>${rides.map(r=>`<div class="ride" onclick="show(${r.id})"><span><b>${esc(r.name)}</b><br><small>${dt(r.date)}</small></span><span style="text-align:right">${km(r.stats.dist)}<br><small>${dur(r.stats.moving)} · ${Math.round(r.stats.gain)} m · ${kmh(r.stats.avgSpeed)}</small></span></div>`).join('')}</div>`
  :'<div class="card">Noch keine Ausfahrten. Importiere deine erste GPX- oder FIT-Datei.</div>'}`;
- if(rides.length)weekly(rides);
+ if(rides.length){weekly(rides);perf(rides)}
 }
 function weekly(rides){
  const W=6048e5,now=Date.now(),mon=(()=>{const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-(d.getDay()+6)%7);return +d})();
@@ -184,6 +185,40 @@ function hist(){
  m=0;x.fillStyle=css('--ac');
  R.forEach((r,i)=>{const rec=v[i]>m;m=Math.max(m,v[i]);x.globalAlpha=rec?1:.4;x.beginPath();x.arc(px(r),py(v[i]),rec?5:3,0,7);x.fill()});
  x.globalAlpha=1;
+}
+function perf(rides){
+ const mo={};
+ rides.forEach(r=>{
+  if(!(r.stats.moving>0))return;
+  const d=new Date(r.date),k=d.getFullYear()*12+d.getMonth(),m=(mo[k]=mo[k]||{d:0,t:0});
+  m.d+=r.stats.dist;m.t+=r.stats.moving; // Bewegungszeit
+ });
+ const ms=Object.keys(mo).map(Number).sort((a,b)=>a-b).map(k=>({k,v:mo[k].d/mo[k].t*3.6}));
+ const e=$('pd');
+ if(!ms.length){e.textContent='Keine Fahrten mit Zeitdaten vorhanden.';e.style.color=css('--mu');return}
+ const f1=n=>n.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1});
+ const nm=(k,o)=>new Date(Math.floor(k/12),k%12).toLocaleDateString('de-DE',o);
+ const[x,w,h]=setup($('pf')),pad=24,k0=ms[0].k,span=ms.at(-1).k-k0;
+ const vs=ms.map(m=>m.v);let lo=Math.min(...vs),hi=Math.max(...vs);
+ if(hi-lo<2){lo-=1;hi+=1}else{const p=(hi-lo)*.15;lo-=p;hi+=p}
+ const px=k=>span?pad+(w-2*pad)*(k-k0)/span:w/2,py=y=>h-26-(h-54)*(y-lo)/(hi-lo);
+ x.font='11px system-ui';x.textAlign='center';
+ // Monatsbeschriftung
+ const step=Math.ceil((span+1)/8);x.fillStyle=css('--mu');
+ for(let i=0;i<=span;i+=step)x.fillText(nm(k0+i,{month:'short',year:'2-digit'}),px(k0+i),h-8);
+ // Linie
+ x.strokeStyle=css('--ac');x.lineWidth=2;x.beginPath();
+ ms.forEach((m,i)=>i?x.lineTo(px(m.k),py(m.v)):x.moveTo(px(m.k),py(m.v)));x.stroke();
+ // Punkte + Werte
+ ms.forEach((m,i)=>{
+  x.fillStyle=css('--ac');x.beginPath();x.arc(px(m.k),py(m.v),4,0,7);x.fill();
+  if(ms.length<=14||i==0||i==ms.length-1){x.fillStyle=css('--tx');x.fillText(f1(m.v),px(m.k),py(m.v)-9)}
+ });
+ // Veränderung zum Vormonat (die zwei letzten Monate mit Fahrten)
+ if(ms.length<2){e.textContent='Für einen Monatsvergleich werden mindestens zwei Monate mit Fahrten benötigt.';e.style.color=css('--mu');e.style.fontWeight=400;return}
+ const a=ms.at(-2),b=ms.at(-1),pc=(b.v/a.v-1)*100,up=pc>=0,L={month:'long',year:'numeric'};
+ e.style.color=up?'#1a9e4b':'#d33';
+ e.textContent=`${up?'▲ +':'▼ '}${f1(pc)} %  (${nm(b.k,L)}: ${f1(b.v)} km/h vs. ${nm(a.k,L)}: ${f1(a.v)} km/h)`;
 }
 function setup(c){const r=c.getBoundingClientRect(),k=devicePixelRatio||1;c.width=r.width*k;c.height=r.height*k;const x=c.getContext('2d');x.scale(k,k);return[x,r.width,r.height]}
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n);
