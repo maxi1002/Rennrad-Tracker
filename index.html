@@ -70,7 +70,7 @@
                         file:text-sm file:font-semibold
                         file:bg-cyan-500 file:text-slate-950
                         hover:file:bg-cyan-400 cursor-pointer mb-2"/>
-                    <p class="text-xs text-slate-400">Unterstützt .gpx und .fit Dateien. Klicke auf eine Fahrt in der Liste für Detailansichten.</p>
+                    <p class="text-xs text-slate-400" id="uploadStatus">Unterstützt .gpx und .fit Dateien.</p>
                 </div>
 
                 <!-- Liste der Ausfahrten -->
@@ -92,7 +92,7 @@
                         🗺️
                     </div>
                     <h3 class="text-xl font-bold">Detailansicht & Analyse</h3>
-                    <p class="text-sm text-slate-400">Klicke in der Liste links auf eine deiner Ausfahrten, um die detaillierte interaktive Karte, das Höhenprofil und alle spezifischen Leistungsdaten in einer separaten Ansicht zu öffnen.</p>
+                    <p class="text-sm text-slate-400">Lade links eine GPX- oder FIT-Datei hoch oder klicke auf eine bestehende Ausfahrt, um die interaktive Karte und das Höhenprofil zu öffnen.</p>
                 </div>
             </div>
         </div>
@@ -152,22 +152,19 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
-    <!-- Hauptskript als Modul (Erlaubt den Import von externen Bibliotheken) -->
-    <script type="module">
-        // Importiere die FIT Parser Bibliothek per CDN (inkl. Polyfills)
-        import FitParser from 'https://esm.sh/fit-parser@1.9.0';
-
-        // Globale Funktionen am window-Objekt registrieren, damit HTML onClick-Events funktionieren
-        window.showMainView = showMainView;
-        window.showDetailView = showDetailView;
-        window.deleteCurrentRide = deleteCurrentRide;
-        window.loadSampleData = loadSampleData;
-
-        let rides = JSON.parse(localStorage.getItem('velo_rides')) || [];
+    <!-- Hauptskript (Standard JS, KEIN Module, um Klick-Events und Ladevorgang zu sichern) -->
+    <script>
+        let rides = [];
+        try {
+            rides = JSON.parse(localStorage.getItem('velo_rides')) || [];
+        } catch (e) {
+            rides = [];
+        }
+        
         let map, polylineLayer, elevationChart;
         let currentActiveRideId = null;
 
-        // Init Map (Verwendet standard OpenStreetMap Tiles ohne API-Schlüssel)
+        // Init Map (ohne API Key)
         function initMap() {
             if (map) return;
             map = L.map('map').setView([51.1657, 10.4515], 6);
@@ -214,7 +211,6 @@
             });
         }
 
-        // Ansichten umschalten
         function showMainView() {
             document.getElementById('mainView').classList.remove('hidden');
             document.getElementById('detailView').classList.add('hidden');
@@ -236,7 +232,6 @@
             }, 100);
         }
 
-        // Gesamtstatistiken berechnen & anzeigen
         function updateGlobalStats() {
             const totalRides = rides.length;
             let totalDist = 0;
@@ -268,16 +263,21 @@
             document.getElementById('statLongestRide').textContent = longestRide.toFixed(1) + ' km';
         }
 
-        // Datei-Upload Event Listener
+        // DATEI UPLOAD LOGIK
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
 
             const fileName = file.name.toLowerCase();
+            const statusText = document.getElementById('uploadStatus');
+            statusText.textContent = "Verarbeite Datei... Bitte warten.";
+            statusText.classList.add("text-cyan-400");
+            
             if (fileName.endsWith('.gpx')) {
                 const reader = new FileReader();
                 reader.onload = function(event) {
                     parseGPX(event.target.result, file.name);
+                    resetUploadStatus();
                 };
                 reader.readAsText(file);
             } else if (fileName.endsWith('.fit')) {
@@ -287,93 +287,102 @@
                 };
                 reader.readAsArrayBuffer(file);
             } else {
-                alert("Bitte wählen Sie eine .gpx oder .fit Datei aus.");
+                alert("Bitte wählen Sie eine gültige .gpx oder .fit Datei aus.");
+                resetUploadStatus();
             }
         });
 
-        // GPX Parser
-        function parseGPX(gpxText, fileName) {
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(gpxText, "text/xml");
-            const trkpts = xmlDoc.getElementsByTagName('trkpt');
-
-            if (trkpts.length === 0) {
-                alert("Keine GPS-Punkte in dieser GPX-Datei gefunden!");
-                return;
-            }
-
-            let points = [];
-            let elevations = [];
-            let distances = [];
-            let totalDist = 0;
-            let totalElevGain = 0;
-            let startTime = null;
-            let endTime = null;
-
-            for (let i = 0; i < trkpts.length; i++) {
-                const lat = parseFloat(trkpts[i].getAttribute('lat'));
-                const lon = parseFloat(trkpts[i].getAttribute('lon'));
-                const eleEl = trkpts[i].getElementsByTagName('ele')[0];
-                const ele = eleEl ? parseFloat(eleEl.textContent) : 0;
-                const timeEl = trkpts[i].getElementsByTagName('time')[0];
-
-                if (timeEl) {
-                    const t = new Date(timeEl.textContent).getTime();
-                    if (!startTime) startTime = t;
-                    endTime = t;
-                }
-
-                points.push([lat, lon]);
-                elevations.push(ele);
-
-                if (i > 0) {
-                    const prev = points[i - 1];
-                    const distStep = getDistanceFromLatLonInKm(prev[0], prev[1], lat, lon);
-                    totalDist += distStep;
-                    distances.push(parseFloat(totalDist.toFixed(2)));
-
-                    const diff = ele - elevations[i - 1];
-                    if (diff > 0) totalElevGain += diff;
-                } else {
-                    distances.push(0);
-                }
-            }
-
-            let durationMinutes = 0;
-            let avgSpeed = 0;
-            if (startTime && endTime && endTime > startTime) {
-                durationMinutes = Math.round((endTime - startTime) / 60000);
-                if (durationMinutes > 0 && totalDist > 0) {
-                    avgSpeed = (totalDist / (durationMinutes / 60)).toFixed(1);
-                }
-            } else {
-                durationMinutes = Math.round(totalDist * 3.5);
-                avgSpeed = durationMinutes > 0 ? (totalDist / (durationMinutes / 60)).toFixed(1) : 0;
-            }
-
-            const maxSpeed = (avgSpeed * 1.3).toFixed(1);
-
-            const newRide = {
-                id: Date.now(),
-                name: fileName.replace(/\.[^/.]+$/, ""),
-                date: new Date().toLocaleDateString(),
-                distance: totalDist.toFixed(2),
-                elevation: Math.round(totalElevGain),
-                duration: durationMinutes,
-                avgSpeed: avgSpeed,
-                maxSpeed: maxSpeed,
-                points: points,
-                elevations: elevations,
-                distances: distances
-            };
-
-            saveAndOpenRide(newRide);
+        function resetUploadStatus() {
+            document.getElementById('fileInput').value = ''; 
+            const statusText = document.getElementById('uploadStatus');
+            statusText.textContent = "Unterstützt .gpx und .fit Dateien.";
+            statusText.classList.remove("text-cyan-400");
         }
 
-        // FIT Parser (mittels importierter Bibliothek)
-        function parseFIT(buffer, fileName) {
+        function parseGPX(gpxText, fileName) {
             try {
-                // Konfiguriere den Parser
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(gpxText, "text/xml");
+                const trkpts = xmlDoc.getElementsByTagName('trkpt');
+
+                if (trkpts.length === 0) {
+                    alert("Keine GPS-Punkte in dieser GPX-Datei gefunden!");
+                    return;
+                }
+
+                let points = [], elevations = [], distances = [];
+                let totalDist = 0, totalElevGain = 0;
+                let startTime = null, endTime = null;
+
+                for (let i = 0; i < trkpts.length; i++) {
+                    const lat = parseFloat(trkpts[i].getAttribute('lat'));
+                    const lon = parseFloat(trkpts[i].getAttribute('lon'));
+                    const eleEl = trkpts[i].getElementsByTagName('ele')[0];
+                    const ele = eleEl ? parseFloat(eleEl.textContent) : 0;
+                    const timeEl = trkpts[i].getElementsByTagName('time')[0];
+
+                    if (timeEl) {
+                        const t = new Date(timeEl.textContent).getTime();
+                        if (!startTime) startTime = t;
+                        endTime = t;
+                    }
+
+                    points.push([lat, lon]);
+                    elevations.push(ele);
+
+                    if (i > 0) {
+                        const prev = points[i - 1];
+                        const distStep = getDistanceFromLatLonInKm(prev[0], prev[1], lat, lon);
+                        totalDist += distStep;
+                        distances.push(parseFloat(totalDist.toFixed(2)));
+
+                        const diff = ele - elevations[i - 1];
+                        if (diff > 0) totalElevGain += diff;
+                    } else {
+                        distances.push(0);
+                    }
+                }
+
+                let durationMinutes = 0, avgSpeed = 0;
+                if (startTime && endTime && endTime > startTime) {
+                    durationMinutes = Math.round((endTime - startTime) / 60000);
+                    if (durationMinutes > 0 && totalDist > 0) {
+                        avgSpeed = (totalDist / (durationMinutes / 60)).toFixed(1);
+                    }
+                } else {
+                    durationMinutes = Math.round(totalDist * 3.5);
+                    avgSpeed = durationMinutes > 0 ? (totalDist / (durationMinutes / 60)).toFixed(1) : 0;
+                }
+
+                const maxSpeed = (avgSpeed * 1.3).toFixed(1);
+
+                const newRide = {
+                    id: Date.now(),
+                    name: fileName.replace(/\.[^/.]+$/, ""),
+                    date: new Date().toLocaleDateString(),
+                    distance: totalDist.toFixed(2),
+                    elevation: Math.round(totalElevGain),
+                    duration: durationMinutes,
+                    avgSpeed: avgSpeed,
+                    maxSpeed: maxSpeed,
+                    points: points,
+                    elevations: elevations,
+                    distances: distances
+                };
+
+                saveAndOpenRide(newRide);
+            } catch (err) {
+                alert("Fehler beim Auslesen der GPX-Datei.");
+                console.error(err);
+            }
+        }
+
+        // Dynamischer, asynchroner FIT-Parser (Lädt Library nur wenn nötig)
+        async function parseFIT(buffer, fileName) {
+            try {
+                // Modul dynamisch über jsdelivr laden (unterstützt Browser-Polyfills)
+                const { default: FitParser } = await import('https://cdn.jsdelivr.net/npm/fit-parser@1.9.0/+esm');
+                
                 const fitParser = new FitParser({
                     force: true,
                     speedUnit: 'km/h',
@@ -381,10 +390,11 @@
                     temperatureUnit: 'celsius'
                 });
 
-                // Umwandeln des ArrayBuffers in ein Format, das der Parser im Browser mag
                 const uint8Array = new Uint8Array(buffer);
 
                 fitParser.parse(uint8Array, function (error, data) {
+                    resetUploadStatus();
+                    
                     if (error) {
                         alert("Fehler beim Verarbeiten der FIT-Datei: " + error);
                         console.error(error);
@@ -393,28 +403,24 @@
 
                     const records = data.records || [];
                     if (records.length === 0) {
-                        alert("Die Datei wurde gelesen, enthält aber keine Strecken-Aufzeichnungen (Records).");
+                        alert("Die Datei enthält keine GPS-Records.");
                         return;
                     }
 
-                    let points = [];
-                    let elevations = [];
-                    let distances = [];
-                    let totalDist = 0;
-                    let totalElevGain = 0;
-                    let speeds = [];
+                    let points = [], elevations = [], distances = [], speeds = [];
+                    let totalDist = 0, totalElevGain = 0;
 
                     records.forEach((rec, i) => {
                         if (rec.position_lat !== undefined && rec.position_long !== undefined) {
                             let lat = rec.position_lat;
                             let lon = rec.position_long;
                             
-                            // Garmin speichert GPS oft als "Semicircles", die erst umgewandelt werden müssen
+                            // Garmin Semicircle Umrechnung
                             if (Math.abs(lat) > 180) lat = lat * (180 / Math.pow(2, 31));
                             if (Math.abs(lon) > 180) lon = lon * (180 / Math.pow(2, 31));
 
                             const ele = rec.altitude || 0;
-                            const dist = rec.distance || (i * 0.05); // Fallback
+                            const dist = rec.distance || (i * 0.05); 
                             const speed = rec.speed || 25; 
 
                             points.push([lat, lon]);
@@ -432,11 +438,10 @@
                     });
 
                     if (points.length === 0) {
-                        alert("Die FIT-Datei enthält leider keine verarbeitbaren GPS-Koordinaten.");
+                        alert("Die FIT-Datei enthält keine verarbeitbaren GPS-Koordinaten.");
                         return;
                     }
 
-                    // Zeit berechnen
                     let durationMinutes = 60;
                     if (data.sessions && data.sessions.length > 0 && data.sessions[0].total_timer_time) {
                         durationMinutes = Math.round(data.sessions[0].total_timer_time / 60);
@@ -444,8 +449,6 @@
                         const first = new Date(records[0].timestamp);
                         const last = new Date(records[records.length-1].timestamp);
                         durationMinutes = Math.round((last - first) / 60000);
-                    } else {
-                        durationMinutes = Math.round(totalDist * 3);
                     }
 
                     const avgSpeed = durationMinutes > 0 ? (totalDist / (durationMinutes / 60)).toFixed(1) : 25.0;
@@ -468,7 +471,8 @@
                     saveAndOpenRide(newRide);
                 });
             } catch (err) {
-                alert("Kritischer Fehler beim FIT-Import: " + err.message);
+                resetUploadStatus();
+                alert("Ladefehler: Die FIT-Bibliothek konnte nicht aus dem Internet geladen werden. Bitte prüfe deine Verbindung.");
                 console.error(err);
             }
         }
@@ -479,11 +483,9 @@
             updateGlobalStats();
             renderRidesList();
             showDetailView(newRide.id);
-            // Input-Feld leeren, damit man die gleiche Datei nochmal laden könnte
-            document.getElementById('fileInput').value = ''; 
         }
 
-        // Haversine Distanzformel
+        // Haversine Distanzformel für GPX
         function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
             const R = 6371;
             const dLat = (lat2 - lat1) * (Math.PI / 180);
@@ -495,7 +497,6 @@
             return R * c;
         }
 
-        // Demo-Daten laden falls nichts da ist
         function loadSampleData() {
             const sample = {
                 id: Date.now(),
@@ -515,7 +516,6 @@
             saveAndOpenRide(sample);
         }
 
-        // Liste der Fahrten rendern
         function renderRidesList() {
             const listEl = document.getElementById('ridesList');
             listEl.innerHTML = '';
@@ -540,7 +540,6 @@
             });
         }
 
-        // Ausfahrt in Detailansicht laden
         function loadRideDetails(id) {
             const ride = rides.find(r => r.id === id);
             if (!ride) return;
@@ -552,18 +551,15 @@
             document.getElementById('detSpeed').textContent = ride.avgSpeed + ' km/h';
             document.getElementById('detTime').textContent = ride.duration + ' Min';
 
-            // Karte aktualisieren
             if (polylineLayer) map.removeLayer(polylineLayer);
             polylineLayer = L.polyline(ride.points, { color: '#22d3ee', weight: 4 }).addTo(map);
             map.fitBounds(polylineLayer.getBounds(), { padding: [30, 30] });
 
-            // Chart aktualisieren
             elevationChart.data.labels = ride.distances;
             elevationChart.data.datasets[0].data = ride.elevations;
             elevationChart.update();
         }
 
-        // Aktuelle Ausfahrt löschen
         function deleteCurrentRide() {
             if (!currentActiveRideId) return;
             if (!confirm("Möchtest du diese Ausfahrt wirklich löschen?")) return;
@@ -573,7 +569,6 @@
             showMainView();
         }
 
-        // Beim Start Initialisierung
         window.onload = function() {
             updateGlobalStats();
             renderRidesList();
